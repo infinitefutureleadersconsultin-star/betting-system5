@@ -42,6 +42,8 @@ export default async function handler(req, res) {
       return;
     }
 
+    console.log("[/api/analyze-prop] body:", req.body);
+
     const body = typeof req.body === "object" && req.body ? req.body : {};
     const payload = {
       sport: body.sport || "",
@@ -103,7 +105,7 @@ export default async function handler(req, res) {
 
     res.status(200).json(response);
   } catch (err) {
-    console.error("[analyze-prop] error", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("[analyze-prop] ERROR:", err);
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
