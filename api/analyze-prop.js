@@ -1,4 +1,3 @@
-// api/analyze-prop.js
 import { PlayerPropsEngine } from "../lib/engines/playerPropsEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 
@@ -81,7 +80,6 @@ export default async function handler(req, res) {
       injuryNotes: body.injuryNotes ?? "UNKNOWN",
     };
 
-    // Create a fresh client with the explicit key (from env resolver)
     const apiKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey });
 
@@ -93,7 +91,6 @@ export default async function handler(req, res) {
     const engine = new PlayerPropsEngine(sdio);
     const result = await engine.evaluateProp(payload);
 
-    // Normalize meta for the client
     const source = typeof result?.meta?.dataSource === "string"
       ? result.meta.dataSource
       : (engine.dataSource || "fallback");
@@ -136,6 +133,29 @@ export default async function handler(req, res) {
       recentCount: meta.recentCount,
       recentFiltered: meta.recentFiltered
     });
+
+    // --- NEW: Post to analytics ---
+    try {
+      const vercelUrl = process.env.VERCEL_URL 
+        ? `https://${process.env.VERCEL_URL}` 
+        : "";
+      const analyticsUrl = `${vercelUrl}/api/analytics`;
+
+      await fetch(analyticsUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          gameId: result.gameId || null,
+          propId: result.propId || null,
+          pick: response.decision,
+          oddsAtPick: response?.odds || null,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      console.log("[analyze-prop] analytics logged");
+    } catch (err) {
+      console.warn("[analyze-prop] analytics post failed", err?.message);
+    }
 
     res.status(200).json(response);
   } catch (err) {
