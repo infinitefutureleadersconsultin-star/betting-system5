@@ -1,58 +1,48 @@
-// api/analyze-prop.js
-import { runCors } from './_cors.js';
-import { APIClient } from '../lib/apiClient.js';
-import { PlayerPropsEngine } from '../lib/engines/playerPropsEngine.js';
-
-const apiClient = new APIClient(process.env.SPORTSDATA_API_KEY || '');
-const engine = new PlayerPropsEngine(apiClient);
+// /api/analytics.js
+import { computeClvEdge } from '../lib/clvTracker.js'
+import { getClosingLine } from '../lib/apiClient.js'
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ message: 'Method Not Allowed' })
+  }
+
   try {
-    await runCors(req, res);
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+    const { gameId, propId, pick, oddsAtPick, timestamp } = req.body
 
-    console.log('[analyze-prop] start', { path: req.url, hasKey: Boolean(process.env.SPORTSDATA_API_KEY) });
+    if (!gameId && !propId) {
+      return res.status(400).json({ message: 'Missing gameId or propId' })
+    }
 
-    const raw = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const body = {
-      ...raw,
-      odds: {
-        over: Number(raw?.odds?.over) || 2.0,
-        under: Number(raw?.odds?.under) || 1.8,
-      },
-      startTime: raw?.startTime || new Date(Date.now() + 6 * 3600e3).toISOString(),
-    };
+    // Pull closing odds from SportsDataIO (if game start is near or passed)
+    let closingOdds = null
+    let clvEdge = null
 
-    const result = await engine.evaluateProp(body);
-    const n = (x, d = 0) => (Number.isFinite(x) ? x : d);
+    try {
+      closingOdds = await getClosingLine(gameId, propId)
+      if (closingOdds && oddsAtPick) {
+        clvEdge = computeClvEdge(oddsAtPick, closingOdds)
+      }
+    } catch (err) {
+      console.error('CLV fetch failed:', err.message)
+    }
 
-    const response = {
-      player: result.player || body.player || 'Unknown Player',
-      prop: result.prop || body.prop || 'Prop',
-      suggestion: result.suggestion || (n(result?.rawNumbers?.modelProbability, 0.5) >= 0.5 ? 'OVER' : 'UNDER'),
-      decision: result.decision || 'PASS',
-      finalConfidence: n(result.finalConfidence, 0),
-      suggestedStake: n(result.suggestedStake, 0),
-      topDrivers: Array.isArray(result.topDrivers) ? result.topDrivers : [],
-      flags: Array.isArray(result.flags) ? result.flags : [],
-      rawNumbers: {
-        expectedValue: n(result?.rawNumbers?.expectedValue, 0),
-        stdDev: n(result?.rawNumbers?.stdDev, 1),
-        modelProbability: n(result?.rawNumbers?.modelProbability, 0.5),
-        marketProbability: n(result?.rawNumbers?.marketProbability, 0.5),
-        sharpSignal: n(result?.rawNumbers?.sharpSignal, 0),
-      },
-    };
+    const logEntry = {
+      gameId,
+      propId,
+      pick,
+      oddsAtPick,
+      closingOdds,
+      clvEdge,
+      timestamp: timestamp || new Date().toISOString()
+    }
 
-    const source = typeof result?.meta?.dataSource === 'string' ? result.meta.dataSource : 'fallback';
-    console.log('[analyze-prop] ok', { source, decision: response.decision, finalConfidence: response.finalConfidence });
+    // For now: log to console (later can push to DB / log service)
+    console.log('Analytics Log:', JSON.stringify(logEntry, null, 2))
 
-    return res.status(200).json({ ...response, meta: { dataSource: source } });
+    return res.status(200).json({ status: 'ok', logEntry })
   } catch (err) {
-    console.error('[analyze-prop] fatal', err?.stack || err?.message || err);
-    return res
-      .status(500)
-      .json({ error: 'Internal server error', details: String(err?.message || err) });
+    console.error('Analytics error:', err)
+    return res.status(500).json({ message: 'Analytics logging failed.' })
   }
 }
