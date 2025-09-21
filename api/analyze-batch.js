@@ -1,8 +1,9 @@
+// /api/analyze-batch.js
 import { BatchAnalyzerEngine } from "../lib/engines/batchAnalyzerEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
 
-// --- Minimal CORS ---
+// --- CORS ---
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -15,7 +16,6 @@ function applyCors(req, res) {
   return false;
 }
 
-// Key resolver
 function resolveSportsDataKey() {
   const candidates = [
     "SPORTS_DATA_IO_KEY",
@@ -46,13 +46,11 @@ export default async function handler(req, res) {
 
     const apiKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey });
-
-    console.log("[analyze-batch] running batch with", games.length, "games");
-
     const engine = new BatchAnalyzerEngine(sdio);
+
     const results = await engine.evaluateBatch(games);
 
-    const enriched = results.map(r => {
+    const enriched = results.map((r) => {
       let clv = null;
       if (r?.rawNumbers?.closingOdds && r?.rawNumbers?.openingOdds) {
         clv = computeCLV(r.rawNumbers.openingOdds, r.rawNumbers.closingOdds);
@@ -63,22 +61,23 @@ export default async function handler(req, res) {
     // --- Analytics post for each ---
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
-      const analyticsUrl = `${vercelUrl}/api/analytics`;
-
-      await Promise.all(enriched.map(r =>
-        fetch(analyticsUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            gameId: r.gameId || null,
-            pick: r.recommendation || r.decision || null,
-            oddsAtPick: r?.rawNumbers?.openingOdds || null,
-            clv: r.clv || null,
-            timestamp: new Date().toISOString(),
-          }),
-        })
-      ));
-      console.log("[analyze-batch] analytics logged for", enriched.length, "entries");
+      if (vercelUrl) {
+        await Promise.all(
+          enriched.map((r) =>
+            fetch(`${vercelUrl}/api/analytics`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                gameId: r.gameId || null,
+                pick: r.recommendation || r.decision || null,
+                oddsAtPick: r?.rawNumbers?.openingOdds || null,
+                clv: r.clv || null,
+                timestamp: new Date().toISOString(),
+              }),
+            })
+          )
+        );
+      }
     } catch (err) {
       console.warn("[analyze-batch] analytics post failed", err?.message);
     }
