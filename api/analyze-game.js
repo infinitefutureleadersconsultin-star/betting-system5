@@ -1,8 +1,9 @@
+// /api/analyze-game.js
 import { GameAnalyzerEngine } from "../lib/engines/gameAnalyzerEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
 
-// --- Minimal CORS ---
+// --- CORS ---
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -15,7 +16,6 @@ function applyCors(req, res) {
   return false;
 }
 
-// Key resolver
 function resolveSportsDataKey() {
   const candidates = [
     "SPORTS_DATA_IO_KEY",
@@ -56,49 +56,42 @@ export default async function handler(req, res) {
 
     const apiKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey });
-
-    console.log("[analyze-game] using SportsDataIO", {
-      hasKey: apiKey ? `yes(len=${apiKey.length})` : "no",
-      baseURL: sdio.baseURL,
-    });
-
     const engine = new GameAnalyzerEngine(sdio);
+
     const result = await engine.evaluateGame(payload);
+
+    let clv = null;
+    if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
+      clv = computeCLV(result.rawNumbers.openingOdds, result.rawNumbers.closingOdds);
+    }
 
     const response = {
       homeTeam: result.homeTeam,
       awayTeam: result.awayTeam,
-      recommendation: result.recommendation,
+      decision: result.recommendation,
       confidence: result.confidence,
       edge: result.edge,
       rawNumbers: result.rawNumbers,
+      clv,
       meta: result.meta,
     };
-
-    // --- CLV compute ---
-    let clv = null;
-    if (response?.rawNumbers?.closingOdds && response?.rawNumbers?.openingOdds) {
-      clv = computeCLV(response.rawNumbers.openingOdds, response.rawNumbers.closingOdds);
-      response.meta = { ...response.meta, clv };
-    }
 
     // --- Analytics post ---
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
-      const analyticsUrl = `${vercelUrl}/api/analytics`;
-
-      await fetch(analyticsUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          gameId: result.gameId || null,
-          pick: response.recommendation,
-          oddsAtPick: response?.rawNumbers?.openingOdds || null,
-          clv,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-      console.log("[analyze-game] analytics logged");
+      if (vercelUrl) {
+        await fetch(`${vercelUrl}/api/analytics`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            gameId: result.gameId || null,
+            pick: response.decision,
+            oddsAtPick: response?.rawNumbers?.openingOdds || null,
+            clv,
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      }
     } catch (err) {
       console.warn("[analyze-game] analytics post failed", err?.message);
     }
