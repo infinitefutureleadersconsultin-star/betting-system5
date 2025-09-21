@@ -41,6 +41,8 @@ export default async function handler(req, res) {
       return;
     }
 
+    console.log("[/api/analyze-batch] body:", req.body);
+
     const body = typeof req.body === "object" && req.body ? req.body : {};
     const games = Array.isArray(body.games) ? body.games : [];
 
@@ -84,7 +86,7 @@ export default async function handler(req, res) {
 
     res.status(200).json({ count: enriched.length, results: enriched });
   } catch (err) {
-    console.error("[analyze-batch] error", err);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("[analyze-batch] ERROR:", err);
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
