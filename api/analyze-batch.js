@@ -1,53 +1,39 @@
-// api/analyze-batch.js
-import { runCors } from './_cors.js';
-import { APIClient } from '../lib/apiClient.js';
-import { PlayerPropsEngine } from '../lib/engines/playerPropsEngine.js';
-import { GameLinesEngine } from '../lib/engines/gameLinesEngine.js';
-
-const apiClient = new APIClient(process.env.SPORTSDATA_API_KEY || '');
-const propsEngine = new PlayerPropsEngine(apiClient);
-const gameEngine  = new GameLinesEngine(apiClient);
+// /api/analyze-batch.js
+import { runBatchAnalysis } from '../lib/engines/gameLinesEngine.js'
+import axios from 'axios'
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ message: 'Method Not Allowed' })
+  }
+
   try {
-    await runCors(req, res);
-    if (req.method === 'OPTIONS') return res.status(200).end();
-    if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+    const body = req.body
+    const results = await runBatchAnalysis(body)
 
-    console.log('[analyze-batch] start');
+    // Post each pick to analytics
+    const picks = [
+      ...(results.props || []),
+      ...(results.games || [])
+    ]
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const { props = [], games = [] } = body;
-
-    const propSettled = await Promise.allSettled(props.map(p => propsEngine.evaluateProp(p)));
-    const gameSettled = await Promise.allSettled(games.map(g => gameEngine.evaluateGameLine(g)));
-
-    const propResults = propSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
-    const gameResults = gameSettled.filter(x => x.status === 'fulfilled').map(x => x.value);
-
-    console.log('[analyze-batch] ok', {
-      props: propResults.length,
-      games: gameResults.length,
-      propErrors: propSettled.filter(x => x.status === 'rejected').length,
-      gameErrors: gameSettled.filter(x => x.status === 'rejected').length,
-    });
-
-    return res.status(200).json({
-      props: propResults,
-      games: gameResults,
-      summary: {
-        totalProps: propResults.length,
-        propsToLock: propResults.filter(p => p.decision === 'LOCK').length,
-        totalGames: gameResults.length,
-        gamesToBet: gameResults.filter(g => g.recommendation === 'BET').length
-      },
-      errors: {
-        propErrors: propSettled.filter(x => x.status === 'rejected').length,
-        gameErrors: gameSettled.filter(x => x.status === 'rejected').length,
+    for (const pick of picks) {
+      try {
+        await axios.post(`${process.env.VERCEL_URL || ''}/api/analytics`, {
+          gameId: pick.gameId || null,
+          propId: pick.propId || null,
+          pick: pick.decision || pick.recommendation,
+          oddsAtPick: pick.odds || null,
+          timestamp: new Date().toISOString()
+        })
+      } catch (err) {
+        console.error('Analytics post failed (batch):', err.message)
       }
-    });
-  } catch (e) {
-    console.error('[analyze-batch] fatal', e?.stack || e?.message || e);
-    return res.status(500).json({ error: 'Internal server error', details: String(e?.message || e) });
+    }
+
+    return res.status(200).json(results)
+  } catch (err) {
+    console.error('Batch analysis error:', err)
+    return res.status(500).json({ message: 'Batch analysis failed.' })
   }
 }
