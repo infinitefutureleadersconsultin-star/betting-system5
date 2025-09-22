@@ -17,6 +17,7 @@ function applyCors(req, res) {
   return false;
 }
 
+// Resolve API key
 function resolveSportsDataKey() {
   const candidates = [
     "SPORTS_DATA_IO_KEY",
@@ -35,8 +36,6 @@ function resolveSportsDataKey() {
 }
 
 export default async function handler(req, res) {
-  console.log("[/api/analyze-batch] START", { method: req.method });
-
   try {
     if (applyCors(req, res)) return;
     if (req.method !== "POST") {
@@ -44,30 +43,29 @@ export default async function handler(req, res) {
       return;
     }
 
+    console.log("[/api/analyze-batch] incoming body raw:", req.body);
+
     let body;
-    try {
-      body =
-        typeof req.body === "string"
-          ? JSON.parse(req.body || "{}")
-          : req.body || {};
-    } catch (err) {
-      console.error("[/api/analyze-batch] Body parse error:", err);
-      res.status(400).json({ error: "Invalid JSON body" });
-      return;
+    if (typeof req.body === "string") {
+      try {
+        body = JSON.parse(req.body);
+      } catch {
+        body = {};
+      }
+    } else {
+      body = req.body || {};
     }
 
-    console.log("[/api/analyze-batch] Parsed body:", body);
-
     const games = Array.isArray(body.games) ? body.games : [];
+    console.log("[/api/analyze-batch] parsed games count:", games.length);
 
     const apiKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey });
     const engine = new BatchAnalyzerEngine(sdio);
 
-    console.log("[/api/analyze-batch] Evaluating batch:", games.length);
     const results = await engine.evaluateBatch(games);
-    console.log("[/api/analyze-batch] Engine results count:", results.length);
 
+    // Enrich with CLV
     const enriched = results.map((r) => {
       let clv = null;
       if (r?.rawNumbers?.closingOdds && r?.rawNumbers?.openingOdds) {
@@ -76,7 +74,7 @@ export default async function handler(req, res) {
       return { ...r, clv };
     });
 
-    // --- Analytics post for each ---
+    // --- Post analytics for each result ---
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
@@ -92,17 +90,20 @@ export default async function handler(req, res) {
                 clv: r.clv || null,
                 timestamp: new Date().toISOString(),
               }),
+            }).catch((err) => {
+              console.warn("[/api/analyze-batch] analytics post failed", err.message);
             })
           )
         );
       }
     } catch (err) {
-      console.warn("[/api/analyze-batch] Analytics post failed:", err?.message);
+      console.warn("[/api/analyze-batch] analytics batch failed", err.message);
     }
 
+    console.log("[/api/analyze-batch] success:", enriched.length, "results");
     res.status(200).json({ count: enriched.length, results: enriched });
   } catch (err) {
-    console.error("[/api/analyze-batch] ERROR:", err);
+    console.error("[/api/analyze-batch] ERROR:", err.stack || err.message);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
