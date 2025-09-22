@@ -1,5 +1,5 @@
 // /api/analyze-prop.js
-import fetch from "node-fetch"; // ensure fetch exists
+import fetch from "node-fetch";
 import { PlayerPropsEngine } from "../lib/engines/playerPropsEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
@@ -17,7 +17,7 @@ function applyCors(req, res) {
   return false;
 }
 
-// Key resolver
+// --- API Key resolver ---
 function resolveSportsDataKey() {
   const candidates = [
     "SPORTS_DATA_IO_KEY",
@@ -36,6 +36,8 @@ function resolveSportsDataKey() {
 }
 
 export default async function handler(req, res) {
+  console.log("[/api/analyze-prop] START", { method: req.method });
+
   try {
     if (applyCors(req, res)) return;
     if (req.method !== "POST") {
@@ -44,21 +46,19 @@ export default async function handler(req, res) {
     }
 
     // --- Parse body safely ---
-    let body = req.body;
-    if (typeof body === "string") {
-      try {
-        body = JSON.parse(body);
-      } catch (err) {
-        console.error("[analyze-prop] invalid JSON body", err.message);
-        res.status(400).json({ error: "Invalid JSON body" });
-        return;
-      }
-    }
-    if (typeof body !== "object" || !body) {
-      console.error("[analyze-prop] body missing or invalid", body);
-      res.status(400).json({ error: "Invalid request body" });
+    let body;
+    try {
+      body =
+        typeof req.body === "string"
+          ? JSON.parse(req.body || "{}")
+          : req.body || {};
+    } catch (err) {
+      console.error("[/api/analyze-prop] Body parse error:", err);
+      res.status(400).json({ error: "Invalid JSON body" });
       return;
     }
+
+    console.log("[/api/analyze-prop] Parsed body:", body);
 
     const payload = {
       sport: body.sport || "",
@@ -72,20 +72,13 @@ export default async function handler(req, res) {
       startTime: body.startTime || null,
     };
 
-    console.log("[analyze-prop] payload received", payload);
-
     const apiKey = resolveSportsDataKey();
-    if (!apiKey) {
-      console.error("[analyze-prop] Missing SportsDataIO API key");
-      res.status(500).json({ error: "API key not configured" });
-      return;
-    }
-
     const sdio = new SportsDataIOClient({ apiKey });
     const engine = new PlayerPropsEngine(sdio);
 
+    console.log("[/api/analyze-prop] Evaluating payload:", payload);
     const result = await engine.evaluateProp(payload);
-    console.log("[analyze-prop] engine result", result);
+    console.log("[/api/analyze-prop] Engine result:", result);
 
     let clv = null;
     if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
@@ -124,12 +117,12 @@ export default async function handler(req, res) {
         });
       }
     } catch (err) {
-      console.warn("[analyze-prop] analytics post failed", err?.message);
+      console.warn("[/api/analyze-prop] Analytics post failed:", err?.message);
     }
 
     res.status(200).json(response);
   } catch (err) {
-    console.error("[analyze-prop] fatal error", err.stack || err.message);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("[/api/analyze-prop] ERROR:", err);
+    res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
