@@ -1,4 +1,5 @@
 // /api/analyze-batch.js
+import fetch from "node-fetch";
 import { BatchAnalyzerEngine } from "../lib/engines/batchAnalyzerEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
@@ -34,6 +35,8 @@ function resolveSportsDataKey() {
 }
 
 export default async function handler(req, res) {
+  console.log("[/api/analyze-batch] START", { method: req.method });
+
   try {
     if (applyCors(req, res)) return;
     if (req.method !== "POST") {
@@ -41,16 +44,29 @@ export default async function handler(req, res) {
       return;
     }
 
-    console.log("[/api/analyze-batch] body:", req.body);
+    let body;
+    try {
+      body =
+        typeof req.body === "string"
+          ? JSON.parse(req.body || "{}")
+          : req.body || {};
+    } catch (err) {
+      console.error("[/api/analyze-batch] Body parse error:", err);
+      res.status(400).json({ error: "Invalid JSON body" });
+      return;
+    }
 
-    const body = typeof req.body === "object" && req.body ? req.body : {};
+    console.log("[/api/analyze-batch] Parsed body:", body);
+
     const games = Array.isArray(body.games) ? body.games : [];
 
     const apiKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey });
     const engine = new BatchAnalyzerEngine(sdio);
 
+    console.log("[/api/analyze-batch] Evaluating batch:", games.length);
     const results = await engine.evaluateBatch(games);
+    console.log("[/api/analyze-batch] Engine results count:", results.length);
 
     const enriched = results.map((r) => {
       let clv = null;
@@ -81,12 +97,12 @@ export default async function handler(req, res) {
         );
       }
     } catch (err) {
-      console.warn("[analyze-batch] analytics post failed", err?.message);
+      console.warn("[/api/analyze-batch] Analytics post failed:", err?.message);
     }
 
     res.status(200).json({ count: enriched.length, results: enriched });
   } catch (err) {
-    console.error("[analyze-batch] ERROR:", err);
+    console.error("[/api/analyze-batch] ERROR:", err);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
