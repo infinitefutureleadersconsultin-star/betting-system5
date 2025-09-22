@@ -1,4 +1,5 @@
 // /api/analyze-game.js
+import fetch from "node-fetch";
 import { GameAnalyzerEngine } from "../lib/engines/gameAnalyzerEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
@@ -34,6 +35,8 @@ function resolveSportsDataKey() {
 }
 
 export default async function handler(req, res) {
+  console.log("[/api/analyze-game] START", { method: req.method });
+
   try {
     if (applyCors(req, res)) return;
     if (req.method !== "POST") {
@@ -41,9 +44,20 @@ export default async function handler(req, res) {
       return;
     }
 
-    console.log("[/api/analyze-game] body:", req.body);
+    let body;
+    try {
+      body =
+        typeof req.body === "string"
+          ? JSON.parse(req.body || "{}")
+          : req.body || {};
+    } catch (err) {
+      console.error("[/api/analyze-game] Body parse error:", err);
+      res.status(400).json({ error: "Invalid JSON body" });
+      return;
+    }
 
-    const body = typeof req.body === "object" && req.body ? req.body : {};
+    console.log("[/api/analyze-game] Parsed body:", body);
+
     const payload = {
       sport: body.sport || "",
       homeTeam: body.homeTeam || "",
@@ -60,7 +74,9 @@ export default async function handler(req, res) {
     const sdio = new SportsDataIOClient({ apiKey });
     const engine = new GameAnalyzerEngine(sdio);
 
+    console.log("[/api/analyze-game] Evaluating payload:", payload);
     const result = await engine.evaluateGame(payload);
+    console.log("[/api/analyze-game] Engine result:", result);
 
     let clv = null;
     if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
@@ -95,12 +111,12 @@ export default async function handler(req, res) {
         });
       }
     } catch (err) {
-      console.warn("[analyze-game] analytics post failed", err?.message);
+      console.warn("[/api/analyze-game] Analytics post failed:", err?.message);
     }
 
     res.status(200).json(response);
   } catch (err) {
-    console.error("[analyze-game] ERROR:", err);
+    console.error("[/api/analyze-game] ERROR:", err);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
