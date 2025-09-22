@@ -46,23 +46,49 @@ export default function BatchAnalyzer() {
     }
   }
 
+  function loadExample() {
+    const example = [
+      {
+        sport: "NBA",
+        team: "Lakers",
+        opponent: "Warriors",
+        startTime: new Date().toISOString(),
+      },
+      {
+        sport: "NBA",
+        team: "Celtics",
+        opponent: "Heat",
+        startTime: new Date().toISOString(),
+      },
+    ];
+    setGames(JSON.stringify(example, null, 2));
+  }
+
   return (
     <div className="p-4 border rounded-md bg-white shadow-md">
       <h2 className="text-lg font-bold mb-2">Batch Analyzer</h2>
       <textarea
-        className="w-full p-2 border rounded mb-2"
-        rows={6}
+        className="w-full p-2 border rounded mb-2 font-mono"
+        rows={8}
         placeholder='Enter JSON array of games (e.g. [{"sport":"NBA","team":"Lakers","opponent":"Warriors"}])'
         value={games}
         onChange={(e) => setGames(e.target.value)}
       />
-      <button
-        onClick={handleAnalyze}
-        disabled={loading}
-        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-      >
-        {loading ? "Analyzing..." : "Analyze Batch"}
-      </button>
+      <div className="flex gap-2 mb-2">
+        <button
+          onClick={handleAnalyze}
+          disabled={loading}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {loading ? "Analyzing..." : "Analyze Batch"}
+        </button>
+        <button
+          onClick={loadExample}
+          className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+        >
+          Load Example
+        </button>
+      </div>
 
       {error && (
         <div className="mt-2 text-red-600 font-semibold">Error: {error}</div>
