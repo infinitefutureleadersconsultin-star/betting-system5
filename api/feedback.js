@@ -6,7 +6,7 @@ import path from "path";
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   if (req.method === "OPTIONS") {
     res.statusCode = 204;
     res.end();
@@ -18,50 +18,51 @@ function applyCors(req, res) {
 export default async function handler(req, res) {
   try {
     if (applyCors(req, res)) return;
-
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method Not Allowed" });
       return;
     }
 
     const body =
-      typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
+      typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body;
 
-    const feedback = {
-      timestamp: new Date().toISOString(),
+    const entry = {
       player: body.player || null,
       prop: body.prop || null,
-      systemDecision: body.systemDecision || null,
-      systemConfidence: body.systemConfidence || null,
-      actualOutcome: body.actualOutcome || null, // e.g. "Hit" or "Missed"
-      notes: body.notes || "",                   // optional user notes
+      decision: body.decision || null,
+      confidence: body.confidence || null,
+      suggestion: body.suggestion || null,
+      hit: body.hit ?? null,
+      notes: body.notes || "",
+      timestamp: body.timestamp || new Date().toISOString(),
     };
 
-    // File lives at /data/feedback.json (make sure /data exists in repo root)
     const dataDir = path.join(process.cwd(), "data");
     const filePath = path.join(dataDir, "feedback.json");
 
-    // Ensure folder exists
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    // Ensure /data dir exists
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir);
+    }
 
-    // Read existing
     let existing = [];
     if (fs.existsSync(filePath)) {
       try {
-        const raw = fs.readFileSync(filePath, "utf-8");
+        const raw = fs.readFileSync(filePath, "utf8");
         existing = JSON.parse(raw);
+        if (!Array.isArray(existing)) existing = [];
       } catch {
         existing = [];
       }
     }
 
-    // Append new feedback
-    existing.push(feedback);
+    existing.push(entry);
+
     fs.writeFileSync(filePath, JSON.stringify(existing, null, 2));
 
-    console.log("[/api/feedback] Logged:", feedback);
+    console.log("[/api/feedback] Saved feedback", entry);
 
-    res.status(200).json({ ok: true, logged: feedback });
+    res.status(200).json({ ok: true, saved: entry });
   } catch (err) {
     console.error("[/api/feedback] ERROR", err);
     res.status(500).json({ error: err.message });
