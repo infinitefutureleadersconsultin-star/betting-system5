@@ -1,34 +1,23 @@
-// /api/analyze-game.js
+// api/analyze-game.js
 import fetch from "node-fetch";
-import { GameAnalyzerEngine } from "../lib/engines/gameAnalyzerEngine.js";
+import { GameLinesEngine } from "../lib/engines/gameLinesEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
 
-// --- CORS ---
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    res.end();
-    return true;
+    res.statusCode = 204; res.end(); return true;
   }
   return false;
 }
 
 function resolveSportsDataKey() {
-  const candidates = [
-    "SPORTS_DATA_IO_KEY",
-    "SPORTS_DATA_IO_API_KEY",
-    "SPORTSDATAIO_KEY",
-    "SDIO_KEY",
-    "SPORTSDATA_API_KEY",
-    "SPORTS_DATA_API_KEY",
-    "SPORTS_DATA_KEY",
-  ];
-  for (const name of candidates) {
-    const v = process.env[name];
+  const names = ["SPORTS_DATA_IO_KEY","SPORTS_DATA_IO_API_KEY","SPORTSDATAIO_KEY","SDIO_KEY","SPORTSDATA_API_KEY","SPORTS_DATA_API_KEY","SPORTS_DATA_KEY"];
+  for (const n of names) {
+    const v = process.env[n];
     if (v && String(v).trim() !== "") return String(v).trim();
   }
   return "";
@@ -39,27 +28,16 @@ export default async function handler(req, res) {
 
   try {
     if (applyCors(req, res)) return;
-    if (req.method !== "POST") {
-      res.status(405).json({ error: "Method Not Allowed" });
-      return;
-    }
+    if (req.method !== "POST") { res.status(405).json({ error: "Method Not Allowed" }); return; }
 
     let body;
-    try {
-      body =
-        typeof req.body === "string"
-          ? JSON.parse(req.body || "{}")
-          : req.body || {};
-    } catch (err) {
-      console.error("[/api/analyze-game] Body parse error:", err);
-      res.status(400).json({ error: "Invalid JSON body" });
-      return;
-    }
+    try { body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {}; }
+    catch (err) { console.error("[/api/analyze-game] body parse error", err); res.status(400).json({ error: "Invalid JSON body" }); return; }
 
-    console.log("[/api/analyze-game] Parsed body:", body);
+    console.log("[/api/analyze-game] parsed body:", body);
 
     const payload = {
-      sport: body.sport || "",
+      sport: (body.sport||"").toUpperCase(),
       homeTeam: body.homeTeam || "",
       awayTeam: body.awayTeam || "",
       line: Number(body.line) || 0,
@@ -67,16 +45,16 @@ export default async function handler(req, res) {
         home: Number(body?.odds?.home) || NaN,
         away: Number(body?.odds?.away) || NaN,
       },
-      startTime: body.startTime || null,
+      startTime: body.startTime || null
     };
 
-    const apiKey = resolveSportsDataKey();
-    const sdio = new SportsDataIOClient({ apiKey });
-    const engine = new GameAnalyzerEngine(sdio);
+    const sdioKey = resolveSportsDataKey();
+    const sdio = new SportsDataIOClient({ apiKey: sdioKey });
+    const engine = new GameLinesEngine(sdio);
 
-    console.log("[/api/analyze-game] Evaluating payload:", payload);
+    console.log("[/api/analyze-game] evaluating payload:", payload);
     const result = await engine.evaluateGame(payload);
-    console.log("[/api/analyze-game] Engine result:", result);
+    console.log("[/api/analyze-game] engine result");
 
     let clv = null;
     if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
@@ -86,15 +64,15 @@ export default async function handler(req, res) {
     const response = {
       homeTeam: result.homeTeam,
       awayTeam: result.awayTeam,
-      decision: result.recommendation,
-      confidence: result.confidence,
-      edge: result.edge,
+      decision: result.decision || result.recommendation,
+      confidence: result.finalConfidence ?? result.confidence,
+      edge: result.edge || null,
       rawNumbers: result.rawNumbers,
       clv,
-      meta: result.meta,
+      meta: result.meta
     };
 
-    // --- Analytics post ---
+    // analytics best-effort
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
@@ -108,15 +86,15 @@ export default async function handler(req, res) {
             clv,
             timestamp: new Date().toISOString(),
           }),
-        });
+        }).catch(e => console.warn("[analyze-game] analytics post fail", e?.message));
       }
     } catch (err) {
-      console.warn("[/api/analyze-game] Analytics post failed:", err?.message);
+      console.warn("[/api/analyze-game] analytics outer", err?.message || err);
     }
 
     res.status(200).json(response);
   } catch (err) {
-    console.error("[/api/analyze-game] ERROR:", err);
+    console.error("[/api/analyze-game] ERROR:", err.stack || err.message);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
