@@ -8,15 +8,17 @@ export default function PropAnalyzer() {
     sport: 'NBA',
     player: '',
     opponent: '',
-    prop: '',               // e.g., "Points 23.5" or "Strikeouts 6.5"
-    oddsOver: '2.0',        // decimal odds (e.g., 1.90, 2.05)
+    prop: '',
+    oddsOver: '2.0',
     oddsUnder: '1.8',
-    startTimeLocal: ''      // HTML datetime-local string
+    startTimeLocal: ''
   });
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  const [note, setNote] = useState('');
+  const [feedbackMsg, setFeedbackMsg] = useState('');
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -26,7 +28,6 @@ export default function PropAnalyzer() {
   const toISOFromLocal = (local) => {
     try {
       if (!local) return '';
-      // "YYYY-MM-DDTHH:mm" -> ISO
       const d = new Date(local);
       if (isNaN(d)) return '';
       return d.toISOString();
@@ -50,21 +51,15 @@ export default function PropAnalyzer() {
         over: parseFloat(form.oddsOver),
         under: parseFloat(form.oddsUnder),
       },
-      // if user didn't pick a time, backend will default to now+6h
       startTime: toISOFromLocal(form.startTimeLocal),
     };
 
     try {
       const response = await axios.post('/api/analyze-prop', analysisData);
-      console.log('[UI] /api/analyze-prop status', response.status, response.data);
-      const data = response.data;
-      setResult(data);
+      console.log('[UI] /api/analyze-prop', response.status, response.data);
+      setResult(response.data);
     } catch (err) {
-      console.error(
-        '[UI] analyze-prop failed',
-        err?.response?.status,
-        err?.response?.data || err?.message
-      );
+      console.error('[UI] analyze-prop failed', err);
       setError(
         err?.response?.data?.error ||
         err?.message ||
@@ -72,6 +67,25 @@ export default function PropAnalyzer() {
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleFeedback = async (outcome) => {
+    try {
+      const payload = {
+        player: form.player,
+        prop: form.prop,
+        outcome,
+        note,
+      };
+      const r = await axios.post('/api/feedback', payload);
+      if (r?.data?.ok) setFeedbackMsg(`Saved: ${outcome} ✅`);
+      else setFeedbackMsg(`Saved (no-disk) ✅`);
+      setNote('');
+      setTimeout(() => setFeedbackMsg(''), 3000);
+    } catch (err) {
+      console.error('feedback failed', err);
+      setFeedbackMsg('Failed to save ❌');
     }
   };
 
@@ -175,6 +189,7 @@ export default function PropAnalyzer() {
           />
         </label>
 
+        {/* Analyze Button */}
         <div className="md:col-span-2 flex items-center gap-3">
           <button
             type="submit"
@@ -187,6 +202,32 @@ export default function PropAnalyzer() {
         </div>
       </form>
 
+      {/* Feedback buttons */}
+      <div className="space-y-2 border-t pt-4">
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Notes about why it hit/didn't hit (variance, injuries, etc.)"
+          className="w-full p-2 bg-gray-50 border rounded text-sm"
+          rows={3}
+        />
+        <div className="flex gap-3">
+          <button
+            onClick={() => handleFeedback("hit")}
+            className="bg-green-600 text-white px-4 py-2 rounded hover:opacity-90"
+          >
+            Hit
+          </button>
+          <button
+            onClick={() => handleFeedback("miss")}
+            className="bg-red-600 text-white px-4 py-2 rounded hover:opacity-90"
+          >
+            Didn’t Hit
+          </button>
+          {feedbackMsg && <span className="text-sm text-gray-600">{feedbackMsg}</span>}
+        </div>
+      </div>
+
       {error && (
         <div className="text-red-600 text-sm border border-red-200 rounded p-3 bg-red-50">
           {error}
@@ -195,10 +236,7 @@ export default function PropAnalyzer() {
 
       {result && (
         <div className="space-y-4">
-          {/* If your ResultCard expects a specific shape, this should match what the API returns */}
           <ResultCard result={result} />
-
-          {/* Simple fallback rendering (kept in case ResultCard has different props) */}
           <div className="border rounded p-4">
             <div className="font-semibold mb-2">Analysis Result (raw)</div>
             <pre className="text-xs overflow-auto">{JSON.stringify(result, null, 2)}</pre>
