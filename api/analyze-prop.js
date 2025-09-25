@@ -1,10 +1,10 @@
-// /api/analyze-prop.js
+// api/analyze-prop.js
 import fetch from "node-fetch";
 import { PlayerPropsEngine } from "../lib/engines/playerPropsEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
 
-// --- CORS ---
+// CORS helper
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
@@ -17,19 +17,10 @@ function applyCors(req, res) {
   return false;
 }
 
-// --- API Key resolver ---
 function resolveSportsDataKey() {
-  const candidates = [
-    "SPORTS_DATA_IO_KEY",
-    "SPORTS_DATA_IO_API_KEY",
-    "SPORTSDATAIO_KEY",
-    "SDIO_KEY",
-    "SPORTSDATA_API_KEY",
-    "SPORTS_DATA_API_KEY",
-    "SPORTS_DATA_KEY",
-  ];
-  for (const name of candidates) {
-    const v = process.env[name];
+  const names = ["SPORTS_DATA_IO_KEY","SPORTS_DATA_IO_API_KEY","SPORTSDATAIO_KEY","SDIO_KEY","SPORTSDATA_API_KEY","SPORTS_DATA_API_KEY","SPORTS_DATA_KEY"];
+  for (const n of names) {
+    const v = process.env[n];
     if (v && String(v).trim() !== "") return String(v).trim();
   }
   return "";
@@ -45,23 +36,19 @@ export default async function handler(req, res) {
       return;
     }
 
-    // --- Parse body safely ---
+    // safe parse
     let body;
     try {
-      body =
-        typeof req.body === "string"
-          ? JSON.parse(req.body || "{}")
-          : req.body || {};
+      body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
     } catch (err) {
-      console.error("[/api/analyze-prop] Body parse error:", err);
+      console.error("[/api/analyze-prop] body parse error", err);
       res.status(400).json({ error: "Invalid JSON body" });
       return;
     }
-
-    console.log("[/api/analyze-prop] Parsed body:", body);
+    console.log("[/api/analyze-prop] body:", body);
 
     const payload = {
-      sport: body.sport || "",
+      sport: (body.sport||"").toUpperCase(),
       player: body.player || "",
       opponent: body.opponent || "",
       prop: body.prop || "",
@@ -72,13 +59,43 @@ export default async function handler(req, res) {
       startTime: body.startTime || null,
     };
 
-    const apiKey = resolveSportsDataKey();
-    const sdio = new SportsDataIOClient({ apiKey });
+    const sdioKey = resolveSportsDataKey();
+    const sdio = new SportsDataIOClient({ apiKey: sdioKey });
     const engine = new PlayerPropsEngine(sdio);
 
-    console.log("[/api/analyze-prop] Evaluating payload:", payload);
+    console.log("[/api/analyze-prop] evaluating payload:", payload);
     const result = await engine.evaluateProp(payload);
-    console.log("[/api/analyze-prop] Engine result:", result);
+    console.log("[/api/analyze-prop] engine result captured");
+
+    // Ensure openingOdds are decimals and compute implied prob (percentage-ready decimal)
+    if (result && result.rawNumbers) {
+      // If engine did not have openingOdds, try to fetch from SDIO odds endpoints as fallback
+      if (!result.rawNumbers.openingOdds || Object.keys(result.rawNumbers.openingOdds).length === 0) {
+        try {
+          // This is a best-effort attempt - engines don't always provide gameId/propId
+          // We try SDIO game odds for the start date:
+          const dt = payload.startTime ? new Date(payload.startTime) : new Date();
+          const dateStr = dt.toISOString().slice(0,10);
+          const s = payload.sport;
+          let oddsList = null;
+          if (s === "MLB") oddsList = await sdio.getMLBGameOdds(dateStr);
+          if (s === "NBA") oddsList = await sdio.getNBAGameOdds(dateStr);
+          if (s === "WNBA") oddsList = await sdio.getWNBAGameOdds(dateStr);
+          if (!oddsList || oddsList.length === 0) {
+            // fallback to OddsAPI
+            const oddsfallback = await sdio.getOddsFromOddsAPI({ sport: s, date: dateStr });
+            if (oddsfallback) {
+              // put the raw odds fallback into result.rawNumbers.openingOddsFallback for inspection
+              result.rawNumbers.openingOddsFallback = oddsfallback;
+            }
+          } else {
+            result.rawNumbers.openingOddsFromSDIO = oddsList;
+          }
+        } catch (err) {
+          console.warn("[/api/analyze-prop] odds enrichment failed", err?.message || err);
+        }
+      }
+    }
 
     let clv = null;
     if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
@@ -96,10 +113,10 @@ export default async function handler(req, res) {
       flags: result.flags,
       rawNumbers: result.rawNumbers,
       clv,
-      meta: result.meta,
+      meta: result.meta
     };
 
-    // --- Analytics post ---
+    // analytics post (best-effort)
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
@@ -114,15 +131,15 @@ export default async function handler(req, res) {
             clv,
             timestamp: new Date().toISOString(),
           }),
-        });
+        }).catch(e => console.warn("[analyze-prop] analytics post fail", e?.message));
       }
     } catch (err) {
-      console.warn("[/api/analyze-prop] Analytics post failed:", err?.message);
+      console.warn("[analyze-prop] analytics post outer failed", err?.message || err);
     }
 
     res.status(200).json(response);
   } catch (err) {
-    console.error("[/api/analyze-prop] ERROR:", err);
+    console.error("[/api/analyze-prop] ERROR:", err.stack || err.message);
     res.status(500).json({ error: err.message, stack: err.stack });
   }
 }
