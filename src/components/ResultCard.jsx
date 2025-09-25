@@ -1,4 +1,3 @@
-// components/ResultCard.jsx
 import React, { useState } from "react";
 import axios from "axios";
 
@@ -12,6 +11,7 @@ export default function ResultCard({ result, type }) {
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitMsg, setSubmitMsg] = useState("");
+  const [feedbackOutcome, setFeedbackOutcome] = useState(null);
 
   if (!result) return null;
 
@@ -39,19 +39,16 @@ export default function ResultCard({ result, type }) {
   // helper to render opening/closing odds cleanly
   const renderOdds = (raw) => {
     if (!raw) return "-";
-    // prop-style openingOdds: { over: 1.87, under: 1.85 }
     if (raw.over !== undefined || raw.under !== undefined) {
       const ov = raw.over !== undefined && Number.isFinite(Number(raw.over)) ? Number(raw.over).toFixed(2) : "-";
       const ud = raw.under !== undefined && Number.isFinite(Number(raw.under)) ? Number(raw.under).toFixed(2) : "-";
       return <div>{`Over: ${ov}  Under: ${ud}`}</div>;
     }
-    // game-style openingOdds: { home: 1.73, away: 2.02 }
     if (raw.home !== undefined || raw.away !== undefined) {
       const h = raw.home !== undefined && Number.isFinite(Number(raw.home)) ? Number(raw.home).toFixed(2) : "-";
       const a = raw.away !== undefined && Number.isFinite(Number(raw.away)) ? Number(raw.away).toFixed(2) : "-";
       return <div>{`Home: ${h}  Away: ${a}`}</div>;
     }
-    // otherwise stringify small
     try {
       return <pre className="text-xs">{JSON.stringify(raw)}</pre>;
     } catch {
@@ -60,11 +57,13 @@ export default function ResultCard({ result, type }) {
   };
 
   const handleFeedbackSubmit = async () => {
+    if (!feedbackOutcome) return;
     setSubmitting(true);
     setSubmitMsg("");
     try {
       const payload = {
         note,
+        outcome: feedbackOutcome,
         actualOutcome: result.actualOutcome || null,
         result
       };
@@ -78,7 +77,7 @@ export default function ResultCard({ result, type }) {
       console.error("feedback failed", err);
     } finally {
       setSubmitting(false);
-      setTimeout(()=>setSubmitMsg(""), 3000);
+      setTimeout(() => setSubmitMsg(""), 3000);
     }
   };
 
@@ -133,10 +132,8 @@ export default function ResultCard({ result, type }) {
         <div className="bg-gray-800 p-4 rounded-lg">
           <h4 className="font-semibold mb-3 text-betting-green">Raw Analytics</h4>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            {/* show all simple key-values first */}
             {Object.entries(result.rawNumbers).map(([k, v]) => {
               if (k === "openingOdds" || k === "closingOdds" || k === "openingOddsFallback" || k === "openingOddsFromSDIO") return null;
-              // For implied probs like marketOverProb / fusedOver - show percentage if decimal range [0,1]
               const lower = typeof v === "number" && v >= 0 && v <= 1;
               return (
                 <div key={k}>
@@ -146,23 +143,19 @@ export default function ResultCard({ result, type }) {
               );
             })}
 
-            {/* Opening odds block */}
             <div>
               <span className="text-gray-400">Opening Odds:</span>
               <div className="ml-2 font-mono">{renderOdds(result.rawNumbers.openingOdds)}</div>
-              {/* implied opening prob if present */}
               {result.rawNumbers.impliedOpeningProb !== undefined && (
                 <div className="text-xs text-gray-400 mt-1">Implied: {pct(result.rawNumbers.impliedOpeningProb)}</div>
               )}
             </div>
 
-            {/* Closing odds block */}
             <div>
               <span className="text-gray-400">Closing Odds:</span>
               <div className="ml-2 font-mono">{renderOdds(result.rawNumbers.closingOdds)}</div>
             </div>
 
-            {/* If we have raw SDIO / fallback objects, show trimmed JSON for debugging */}
             {result.rawNumbers.openingOddsFromSDIO && (
               <div className="md:col-span-2">
                 <span className="text-gray-400">SDIO Odds (raw):</span>
@@ -178,8 +171,17 @@ export default function ResultCard({ result, type }) {
           </div>
 
           <div className="mt-3 flex gap-2">
-            <button className="bg-gray-700 px-3 py-1 rounded" onClick={()=>setFeedbackOpen(f=>!f)}>
-              {feedbackOpen ? "Cancel" : "Didn't hit"}
+            <button
+              className="bg-green-700 px-3 py-1 rounded"
+              onClick={() => { setFeedbackOutcome("hit"); setFeedbackOpen(f => !f); }}
+            >
+              {feedbackOpen && feedbackOutcome === "hit" ? "Cancel" : "Hit"}
+            </button>
+            <button
+              className="bg-red-700 px-3 py-1 rounded"
+              onClick={() => { setFeedbackOutcome("miss"); setFeedbackOpen(f => !f); }}
+            >
+              {feedbackOpen && feedbackOutcome === "miss" ? "Cancel" : "Didn't Hit"}
             </button>
             {submitMsg && <div className="text-sm text-green-400">{submitMsg}</div>}
           </div>
@@ -194,10 +196,17 @@ export default function ResultCard({ result, type }) {
                 rows={4}
               />
               <div className="flex gap-2">
-                <button disabled={submitting} onClick={handleFeedbackSubmit} className="bg-green-600 px-3 py-1 rounded">
+                <button
+                  disabled={submitting}
+                  onClick={handleFeedbackSubmit}
+                  className="bg-green-600 px-3 py-1 rounded"
+                >
                   {submitting ? "Saving..." : "Save Feedback"}
                 </button>
-                <button onClick={()=>{ setFeedbackOpen(false); setNote(""); }} className="bg-gray-600 px-3 py-1 rounded">
+                <button
+                  onClick={()=>{ setFeedbackOpen(false); setNote(""); setFeedbackOutcome(null); }}
+                  className="bg-gray-600 px-3 py-1 rounded"
+                >
                   Cancel
                 </button>
               </div>
