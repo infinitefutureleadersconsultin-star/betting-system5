@@ -1,35 +1,21 @@
-// /api/analyze-batch.js
+// api/analyze-batch.js
 import fetch from "node-fetch";
 import { BatchAnalyzerEngine } from "../lib/engines/batchAnalyzerEngine.js";
 import { SportsDataIOClient } from "../lib/apiClient.js";
 import { computeCLV } from "../lib/clvTracker.js";
 
-// --- CORS ---
 function applyCors(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  if (req.method === "OPTIONS") {
-    res.statusCode = 204;
-    res.end();
-    return true;
-  }
+  if (req.method === "OPTIONS") { res.statusCode = 204; res.end(); return true; }
   return false;
 }
 
-// Resolve API key
 function resolveSportsDataKey() {
-  const candidates = [
-    "SPORTS_DATA_IO_KEY",
-    "SPORTS_DATA_IO_API_KEY",
-    "SPORTSDATAIO_KEY",
-    "SDIO_KEY",
-    "SPORTSDATA_API_KEY",
-    "SPORTS_DATA_API_KEY",
-    "SPORTS_DATA_KEY",
-  ];
-  for (const name of candidates) {
-    const v = process.env[name];
+  const names = ["SPORTS_DATA_IO_KEY","SPORTS_DATA_IO_API_KEY","SPORTSDATAIO_KEY","SDIO_KEY","SPORTSDATA_API_KEY","SPORTS_DATA_API_KEY","SPORTS_DATA_KEY"];
+  for (const n of names) {
+    const v = process.env[n];
     if (v && String(v).trim() !== "") return String(v).trim();
   }
   return "";
@@ -38,34 +24,23 @@ function resolveSportsDataKey() {
 export default async function handler(req, res) {
   try {
     if (applyCors(req, res)) return;
-    if (req.method !== "POST") {
-      res.status(405).json({ error: "Method Not Allowed" });
-      return;
-    }
+    if (req.method !== "POST") { res.status(405).json({ error: "Method Not Allowed" }); return; }
 
-    console.log("[/api/analyze-batch] incoming body raw:", req.body);
+    console.log("[/api/analyze-batch] start");
 
     let body;
-    if (typeof req.body === "string") {
-      try {
-        body = JSON.parse(req.body);
-      } catch {
-        body = {};
-      }
-    } else {
-      body = req.body || {};
-    }
+    try { body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {}; }
+    catch (err) { console.error("[/api/analyze-batch] body parse error", err); res.status(400).json({ error: "Invalid JSON body" }); return; }
 
     const games = Array.isArray(body.games) ? body.games : [];
-    console.log("[/api/analyze-batch] parsed games count:", games.length);
+    console.log("[/api/analyze-batch] games count:", games.length);
 
-    const apiKey = resolveSportsDataKey();
-    const sdio = new SportsDataIOClient({ apiKey });
+    const sdioKey = resolveSportsDataKey();
+    const sdio = new SportsDataIOClient({ apiKey: sdioKey });
     const engine = new BatchAnalyzerEngine(sdio);
 
     const results = await engine.evaluateBatch(games);
 
-    // Enrich with CLV
     const enriched = results.map((r) => {
       let clv = null;
       if (r?.rawNumbers?.closingOdds && r?.rawNumbers?.openingOdds) {
@@ -74,33 +49,29 @@ export default async function handler(req, res) {
       return { ...r, clv };
     });
 
-    // --- Post analytics for each result ---
+    // Analytics posts (fire & forget)
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
-        await Promise.all(
-          enriched.map((r) =>
-            fetch(`${vercelUrl}/api/analytics`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                gameId: r.gameId || null,
-                pick: r.recommendation || r.decision || null,
-                oddsAtPick: r?.rawNumbers?.openingOdds || null,
-                clv: r.clv || null,
-                timestamp: new Date().toISOString(),
-              }),
-            }).catch((err) => {
-              console.warn("[/api/analyze-batch] analytics post failed", err.message);
+        await Promise.all(enriched.map(r =>
+          fetch(`${vercelUrl}/api/analytics`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              gameId: r.gameId || null,
+              pick: r.recommendation || r.decision || null,
+              oddsAtPick: r?.rawNumbers?.openingOdds || null,
+              clv: r.clv || null,
+              timestamp: new Date().toISOString(),
             })
-          )
-        );
+          }).catch(e => console.warn("[analyze-batch] analytics post fail", e?.message))
+        ));
       }
     } catch (err) {
-      console.warn("[/api/analyze-batch] analytics batch failed", err.message);
+      console.warn("[analyze-batch] analytics outer fail", err?.message || err);
     }
 
-    console.log("[/api/analyze-batch] success:", enriched.length, "results");
+    console.log("[/api/analyze-batch] success:", enriched.length);
     res.status(200).json({ count: enriched.length, results: enriched });
   } catch (err) {
     console.error("[/api/analyze-batch] ERROR:", err.stack || err.message);
