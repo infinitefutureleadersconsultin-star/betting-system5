@@ -1,8 +1,8 @@
-// api/analyze-prop.js
+// pages/api/analyze-prop.js
 import fetch from "node-fetch";
-import { PlayerPropsEngine } from "../lib/engines/playerPropsEngine.js";
-import { SportsDataIOClient } from "../lib/apiClient.js";
-import { computeCLV } from "../lib/clvTracker.js";
+import { PlayerPropsEngine } from "../../lib/engines/playerPropsEngine.js";  // ✅ fixed path
+import { SportsDataIOClient } from "../../lib/apiClient.js";
+import { computeCLV } from "../../lib/clvTracker.js";
 
 // CORS helper
 function applyCors(req, res) {
@@ -18,7 +18,15 @@ function applyCors(req, res) {
 }
 
 function resolveSportsDataKey() {
-  const names = ["SPORTS_DATA_IO_KEY","SPORTS_DATA_IO_API_KEY","SPORTSDATAIO_KEY","SDIO_KEY","SPORTSDATA_API_KEY","SPORTS_DATA_API_KEY","SPORTS_DATA_KEY"];
+  const names = [
+    "SPORTS_DATA_IO_KEY",
+    "SPORTS_DATA_IO_API_KEY",
+    "SPORTSDATAIO_KEY",
+    "SDIO_KEY",
+    "SPORTSDATA_API_KEY",
+    "SPORTS_DATA_API_KEY",
+    "SPORTS_DATA_KEY",
+  ];
   for (const n of names) {
     const v = process.env[n];
     if (v && String(v).trim() !== "") return String(v).trim();
@@ -48,7 +56,7 @@ export default async function handler(req, res) {
     console.log("[/api/analyze-prop] body:", body);
 
     const payload = {
-      sport: (body.sport||"").toUpperCase(),
+      sport: (body.sport || "").toUpperCase(),
       player: body.player || "",
       opponent: body.opponent || "",
       prop: body.prop || "",
@@ -69,23 +77,18 @@ export default async function handler(req, res) {
 
     // Ensure openingOdds are decimals and compute implied prob (percentage-ready decimal)
     if (result && result.rawNumbers) {
-      // If engine did not have openingOdds, try to fetch from SDIO odds endpoints as fallback
       if (!result.rawNumbers.openingOdds || Object.keys(result.rawNumbers.openingOdds).length === 0) {
         try {
-          // This is a best-effort attempt - engines don't always provide gameId/propId
-          // We try SDIO game odds for the start date:
           const dt = payload.startTime ? new Date(payload.startTime) : new Date();
-          const dateStr = dt.toISOString().slice(0,10);
+          const dateStr = dt.toISOString().slice(0, 10);
           const s = payload.sport;
           let oddsList = null;
           if (s === "MLB") oddsList = await sdio.getMLBGameOdds(dateStr);
           if (s === "NBA") oddsList = await sdio.getNBAGameOdds(dateStr);
           if (s === "WNBA") oddsList = await sdio.getWNBAGameOdds(dateStr);
           if (!oddsList || oddsList.length === 0) {
-            // fallback to OddsAPI
             const oddsfallback = await sdio.getOddsFromOddsAPI({ sport: s, date: dateStr });
             if (oddsfallback) {
-              // put the raw odds fallback into result.rawNumbers.openingOddsFallback for inspection
               result.rawNumbers.openingOddsFallback = oddsfallback;
             }
           } else {
@@ -113,10 +116,9 @@ export default async function handler(req, res) {
       flags: result.flags,
       rawNumbers: result.rawNumbers,
       clv,
-      meta: result.meta
+      meta: result.meta,
     };
 
-    // analytics post (best-effort)
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
@@ -131,7 +133,7 @@ export default async function handler(req, res) {
             clv,
             timestamp: new Date().toISOString(),
           }),
-        }).catch(e => console.warn("[analyze-prop] analytics post fail", e?.message));
+        }).catch((e) => console.warn("[analyze-prop] analytics post fail", e?.message));
       }
     } catch (err) {
       console.warn("[analyze-prop] analytics post outer failed", err?.message || err);
