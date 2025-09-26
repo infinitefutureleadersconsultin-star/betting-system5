@@ -1,7 +1,7 @@
 import fetch from "node-fetch";
-import { PlayerPropsEngine } from "../../lib/engines/playerPropsEngine.js";
-import { SportsDataIOClient } from "../../lib/apiClient.js";
-import { computeCLV } from "../../lib/clvTracker.js";
+import { PlayerPropsEngine } from "./../lib/engines/playerPropsEngine.js";
+import { SportsDataIOClient } from "./../lib/apiClient.js";
+import { computeCLV } from "./../lib/clvTracker.js";
 
 // CORS helper
 function applyCors(req, res) {
