@@ -1,9 +1,10 @@
 // api/analyze-prop.js
+// Enhanced for compatibility with playerPropsEngine v2 (fuzzy matching, CLV, opening odds)
 import fetch from "node-fetch";
 import Fuse from "fuse.js";
 import { PlayerPropsEngine } from "./../lib/engines/playerPropsEngine.js";
 import { SportsDataIOClient } from "./../lib/apiClient.js";
-import { computeCLV } from "./../lib/clvTracker.js";
+import { StatisticalModels } from "./../lib/statisticalModels.js";
 
 // CORS helper
 function applyCors(req, res) {
@@ -35,9 +36,11 @@ function resolveSportsDataKey() {
   return "";
 }
 
-// fuzzy-match helper using roster lists (fallback)
+// Roster-based fuzzy matching (pre-normalization step before engine processing)
+// This helps with exact roster lookups and complements engine's fuzzy matching
 function fuzzyMatchPlayerSimple(inputName, rosterList = []) {
   if (!inputName || !Array.isArray(rosterList) || rosterList.length === 0) return inputName;
+  
   const candidates = rosterList
     .map((r) => ({
       name: (r?.Name || r?.FullName || r?.full_name || "").toString(),
@@ -45,29 +48,72 @@ function fuzzyMatchPlayerSimple(inputName, rosterList = []) {
     }))
     .filter((c) => c.name);
 
+  if (candidates.length === 0) return inputName;
+
+  // Fuse.js fuzzy search
   const fuse = new Fuse(candidates, { keys: ["name"], threshold: 0.35 });
   const res = fuse.search(inputName);
-  if (res && res.length > 0 && res[0]?.item?.name) return res[0].item.name;
+  if (res && res.length > 0 && res[0]?.item?.name) {
+    console.log(`[fuzzyMatchPlayerSimple] Matched: "${inputName}" -> "${res[0].item.name}" (score: ${res[0].score})`);
+    return res[0].item.name;
+  }
 
+  // Token-based fallback
   const tok = inputName.toLowerCase().split(/\s+/).filter(Boolean);
   for (const c of candidates) {
     const cname = c.name.toLowerCase();
     const ok = tok.every((t) => cname.includes(t));
-    if (ok) return c.name;
+    if (ok) {
+      console.log(`[fuzzyMatchPlayerSimple] Token matched: "${inputName}" -> "${c.name}"`);
+      return c.name;
+    }
   }
+  
   return inputName;
 }
 
+// Extract American odds from payload
+function extractCurrentPrice(payload) {
+  try {
+    // Check if odds object exists
+    if (payload?.odds) {
+      // Default to -110 if no valid odds
+      const overOdds = Number(payload.odds.over);
+      const underOdds = Number(payload.odds.under);
+      
+      // Return the first valid odds value found
+      if (Number.isFinite(overOdds) && overOdds !== 0) return overOdds;
+      if (Number.isFinite(underOdds) && underOdds !== 0) return underOdds;
+    }
+    
+    // Check for direct price field
+    if (payload?.currentPrice && Number.isFinite(Number(payload.currentPrice))) {
+      return Number(payload.currentPrice);
+    }
+    
+    // Default to standard -110 if nothing found
+    return -110;
+  } catch (err) {
+    console.warn("[extractCurrentPrice] Failed:", err?.message || err);
+    return -110;
+  }
+}
+
 export default async function handler(req, res) {
-  console.log("[/api/analyze-prop] START", { method: req.method });
+  console.log("[/api/analyze-prop] START", { 
+    method: req.method,
+    timestamp: new Date().toISOString() 
+  });
 
   try {
     if (applyCors(req, res)) return;
+    
     if (req.method !== "POST") {
       res.status(405).json({ error: "Method Not Allowed" });
       return;
     }
 
+    // Parse request body
     let body;
     try {
       body = typeof req.body === "string" ? JSON.parse(req.body || "{}") : req.body || {};
@@ -78,6 +124,7 @@ export default async function handler(req, res) {
     }
     console.log("[/api/analyze-prop] body:", { body });
 
+    // Construct payload with all necessary fields
     const payload = {
       sport: (body.sport || "").toUpperCase(),
       player: (body.player || "").toString(),
@@ -88,88 +135,73 @@ export default async function handler(req, res) {
         under: Number(body?.odds?.under) || NaN,
       },
       startTime: body.startTime || null,
+      currentPrice: extractCurrentPrice(body), // NEW: for CLV computation
     };
 
+    // Initialize API client and engine
     const sdioKey = resolveSportsDataKey();
     const sdio = new SportsDataIOClient({ apiKey: sdioKey });
     const engine = new PlayerPropsEngine(sdio);
 
-    // --- NEW: roster-based fuzzy matching for NBA/WNBA/NFL ---
+    // OPTIONAL: Pre-normalize player name via roster lookup
+    // This provides an exact roster match before engine's fuzzy matching
     try {
       if (["NBA", "WNBA"].includes(payload.sport) && sdio) {
         let roster = [];
         try {
-          roster = (await sdio.getNBARosters()) || [];
-        } catch (err) {
-          try {
+          if (payload.sport === "NBA" && typeof sdio.getNBARosters === "function") {
+            roster = (await sdio.getNBARosters()) || [];
+          } else if (payload.sport === "WNBA" && typeof sdio.getWNBARosters === "function") {
             roster = (await sdio.getWNBARosters()) || [];
-          } catch {}
+          }
+        } catch (err) {
+          console.warn("[/api/analyze-prop] roster fetch failed", err?.message || err);
         }
+        
         if (Array.isArray(roster) && roster.length) {
           const matchedName = fuzzyMatchPlayerSimple(payload.player, roster);
           if (matchedName && matchedName !== payload.player) {
-            console.log("[/api/analyze-prop] fuzzy match applied", { from: payload.player, to: matchedName });
+            console.log("[/api/analyze-prop] roster pre-match applied", { 
+              from: payload.player, 
+              to: matchedName 
+            });
             payload.player = matchedName;
           }
         }
       } else if (payload.sport === "NFL" && sdio) {
         try {
-          const roster = (await sdio.getNFLRosters()) || [];
-          if (Array.isArray(roster) && roster.length) {
-            const matchedName = fuzzyMatchPlayerSimple(payload.player, roster);
-            if (matchedName && matchedName !== payload.player) {
-              console.log("[/api/analyze-prop] fuzzy match applied (NFL)", { from: payload.player, to: matchedName });
-              payload.player = matchedName;
+          if (typeof sdio.getNFLRosters === "function") {
+            const roster = (await sdio.getNFLRosters()) || [];
+            if (Array.isArray(roster) && roster.length) {
+              const matchedName = fuzzyMatchPlayerSimple(payload.player, roster);
+              if (matchedName && matchedName !== payload.player) {
+                console.log("[/api/analyze-prop] roster pre-match applied (NFL)", { 
+                  from: payload.player, 
+                  to: matchedName 
+                });
+                payload.player = matchedName;
+              }
             }
           }
-        } catch {}
+        } catch (err) {
+          console.warn("[/api/analyze-prop] NFL roster fetch failed", err?.message || err);
+        }
       }
     } catch (err) {
       console.warn("[/api/analyze-prop] roster fuzzy match failed", err?.message || err);
     }
 
+    // Evaluate prop using enhanced engine (with built-in fuzzy matching, odds, CLV)
     console.log("[/api/analyze-prop] evaluating payload:", { payload });
     const result = await engine.evaluateProp(payload);
-    console.log("[/api/analyze-prop] engine result captured", { player: result?.player, decision: result?.decision });
+    console.log("[/api/analyze-prop] engine result captured", { 
+      player: result?.player, 
+      decision: result?.decision,
+      confidence: result?.finalConfidence,
+      clv: result?.clv?.percent
+    });
 
-    // Ensure openingOdds are decimals and compute implied prob
-    if (result && result.rawNumbers) {
-      if (!result.rawNumbers.openingOdds || Object.keys(result.rawNumbers.openingOdds).length === 0) {
-        try {
-          const dt = payload.startTime ? new Date(payload.startTime) : new Date();
-          const dateStr = dt.toISOString().slice(0, 10);
-          const s = payload.sport;
-          let oddsList = null;
-          if (s === "MLB" && typeof sdio.getMLBGameOdds === "function") oddsList = await sdio.getMLBGameOdds(dateStr);
-          if (s === "NBA" && typeof sdio.getNBAGameOdds === "function") oddsList = await sdio.getNBAGameOdds(dateStr);
-          if (s === "WNBA" && typeof sdio.getWNBAGameOdds === "function") oddsList = await sdio.getWNBAGameOdds(dateStr);
-          if (s === "NFL" && typeof sdio.getNFLGameOdds === "function") oddsList = await sdio.getNFLGameOdds(dateStr);
-
-          if (!oddsList || oddsList.length === 0) {
-            try {
-              const oddsfallback = await sdio.getOddsFromOddsAPI({ sport: s, date: dateStr });
-              if (oddsfallback) result.rawNumbers.openingOddsFallback = oddsfallback;
-            } catch (err) {
-              console.warn("[/api/analyze-prop] oddsfallback failed", err?.message || err);
-            }
-          } else {
-            result.rawNumbers.openingOddsFromSDIO = oddsList;
-          }
-        } catch (err) {
-          console.warn("[/api/analyze-prop] odds enrichment failed", err?.message || err);
-        }
-      }
-    }
-
-    let clv = null;
-    try {
-      if (result?.rawNumbers?.closingOdds && result?.rawNumbers?.openingOdds) {
-        clv = computeCLV(result.rawNumbers.openingOdds, result.rawNumbers.closingOdds);
-      }
-    } catch (err) {
-      console.warn("[/api/analyze-prop] clv compute failed", err?.message || err);
-    }
-
+    // Normalize result with fallback handling
     const normalizedResult = (function () {
       try {
         if (!result || !result.decision) {
@@ -189,26 +221,37 @@ export default async function handler(req, res) {
         const seasonAvg = Number.isFinite(raw?.seasonAvg) ? raw.seasonAvg : NaN;
         const usedAvg = Number.isFinite(raw?.usedAvg) ? raw.usedAvg : NaN;
 
-        if ((!Number.isFinite(usedAvg) && !Number.isFinite(seasonAvg)) || (hasNumericConfidence && result.finalConfidence <= 1)) {
+        // If engine couldn't produce a valid estimate, apply fallback baseline logic
+        if ((!Number.isFinite(usedAvg) && !Number.isFinite(seasonAvg)) || 
+            (hasNumericConfidence && result.finalConfidence <= 1)) {
+          
           let baselineAvg = NaN;
+
+          // Try league averages
           try {
             if (sdio && typeof sdio.getLeagueAverages === "function") {
-              try {
-                const la = await sdio.getLeagueAverages(payload.sport, payload.prop);
-                if (la && Number.isFinite(Number(la))) baselineAvg = Number(la);
-              } catch {}
+              const la = await sdio.getLeagueAverages(payload.sport, payload.prop);
+              if (la && Number.isFinite(Number(la))) baselineAvg = Number(la);
             }
-          } catch {}
+          } catch (err) {
+            console.warn("[/api/analyze-prop] league average fetch failed", err?.message || err);
+          }
 
+          // Try StatisticalModels baseline
           if (!Number.isFinite(baselineAvg)) {
             try {
-              if (typeof StatisticalModels !== "undefined" && StatisticalModels && typeof StatisticalModels.getBaseline === "function") {
+              if (typeof StatisticalModels !== "undefined" && 
+                  StatisticalModels && 
+                  typeof StatisticalModels.getBaseline === "function") {
                 const b = StatisticalModels.getBaseline(payload.sport, payload.prop);
                 if (Number.isFinite(Number(b))) baselineAvg = Number(b);
               }
-            } catch {}
+            } catch (err) {
+              console.warn("[/api/analyze-prop] StatisticalModels baseline failed", err?.message || err);
+            }
           }
 
+          // Hardcoded fallback
           if (!Number.isFinite(baselineAvg)) {
             const p = (payload.prop || "").toLowerCase();
             if (p.includes("rebound")) baselineAvg = 5;
@@ -218,11 +261,14 @@ export default async function handler(req, res) {
             else baselineAvg = 1;
           }
 
+          // Extract line
           const line = raw.line || (() => {
             try {
               const m = String(payload.prop || "").match(/(-?\d+(\.\d+)?)/);
               return m ? parseFloat(m[1]) : NaN;
-            } catch { return NaN; }
+            } catch { 
+              return NaN; 
+            }
           })();
 
           let fallbackPick = "ESTIMATE (Low Confidence)";
@@ -233,7 +279,9 @@ export default async function handler(req, res) {
             fallbackPick = baselineAvg > line ? "OVER (Low Confidence)" : "UNDER (Low Confidence)";
             const diff = Math.abs(baselineAvg - line);
             fallbackConf = Math.round(50 + Math.min(40, diff * 6));
-            fallbackSuggestion = fallbackPick.includes("OVER") ? "Bet Over (small stake)" : "Bet Under (small stake)";
+            fallbackSuggestion = fallbackPick.includes("OVER") 
+              ? "Bet Over (small stake)" 
+              : "Bet Under (small stake)";
           }
 
           return {
@@ -257,12 +305,19 @@ export default async function handler(req, res) {
               line,
               sampleSize: sampleSize,
             },
-            clv,
+            oddsData: result?.oddsData || null,
+            clv: result?.clv || null,
             meta: result?.meta || {},
           };
         }
 
-        return { ...result, clv };
+        // Return engine result with CLV/odds data intact
+        return { 
+          ...result,
+          // Ensure oddsData and clv are present
+          oddsData: result?.oddsData || null,
+          clv: result?.clv || null,
+        };
       } catch (err) {
         console.warn("[/api/analyze-prop] normalization failed", err?.message || err);
         return {
@@ -275,36 +330,44 @@ export default async function handler(req, res) {
           topDrivers: ["Normalization error fallback"],
           flags: ["normalization_error"],
           rawNumbers: { line: null, sampleSize: 0 },
-          clv,
+          oddsData: null,
+          clv: null,
           meta: {},
         };
       }
     })();
 
+    // Optional: Post to analytics endpoint (non-blocking)
     try {
       const vercelUrl = process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "";
       if (vercelUrl) {
-        await fetch(`${vercelUrl}/api/analytics`, {
+        fetch(`${vercelUrl}/api/analytics`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             gameId: result?.gameId || null,
             propId: result?.propId || null,
             pick: normalizedResult.decision,
-            oddsAtPick: normalizedResult?.rawNumbers?.openingOdds || null,
+            oddsAtPick: normalizedResult?.oddsData || null,
             clv: normalizedResult?.clv || null,
             timestamp: new Date().toISOString(),
           }),
-        }).catch((e) => console.warn("[analyze-prop] analytics post fail", e?.message));
+        }).catch((e) => {
+          console.warn("[analyze-prop] analytics post fail", e?.message);
+        });
       }
     } catch (err) {
       console.warn("[analyze-prop] analytics post outer failed", err?.message || err);
     }
 
+    // Return final response
     res.status(200).json(normalizedResult);
   } catch (err) {
     console.error("[/api/analyze-prop] ERROR:", err?.stack || err?.message);
-    res.status(500).json({ error: err?.message || String(err) });
+    res.status(500).json({ 
+      error: err?.message || String(err),
+      stack: process.env.NODE_ENV === "development" ? err?.stack : undefined
+    });
   }
 }
 
