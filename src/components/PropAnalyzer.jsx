@@ -9,8 +9,8 @@ export default function PropAnalyzer() {
     player: '',
     opponent: '',
     prop: '',
-    oddsOver: '2.0',
-    oddsUnder: '1.8',
+    oddsOver: '-110',
+    oddsUnder: '-110',
     startTimeLocal: ''
   });
 
@@ -51,6 +51,7 @@ export default function PropAnalyzer() {
         over: parseFloat(form.oddsOver),
         under: parseFloat(form.oddsUnder),
       },
+      currentPrice: parseFloat(form.oddsOver), // Use over odds as current price for CLV
       startTime: toISOFromLocal(form.startTimeLocal),
     };
 
@@ -163,30 +164,36 @@ export default function PropAnalyzer() {
           />
         </label>
 
-        {/* Odds Over */}
+        {/* Odds Over (American format) */}
         <label className="flex flex-col">
-          <span className="text-sm font-medium mb-1">Over (decimal odds)</span>
+          <span className="text-sm font-medium mb-1">Over (American odds)</span>
           <input
-            type="number"
-            step="0.01"
+            type="text"
             name="oddsOver"
             value={form.oddsOver}
             onChange={handleChange}
+            placeholder="-110, +120, etc."
             className="border rounded p-2"
           />
+          <span className="text-xs text-gray-500 mt-1">
+            American format: -110, +150, etc.
+          </span>
         </label>
 
-        {/* Odds Under */}
+        {/* Odds Under (American format) */}
         <label className="flex flex-col">
-          <span className="text-sm font-medium mb-1">Under (decimal odds)</span>
+          <span className="text-sm font-medium mb-1">Under (American odds)</span>
           <input
-            type="number"
-            step="0.01"
+            type="text"
             name="oddsUnder"
             value={form.oddsUnder}
             onChange={handleChange}
+            placeholder="-110, +120, etc."
             className="border rounded p-2"
           />
+          <span className="text-xs text-gray-500 mt-1">
+            American format: -110, +150, etc.
+          </span>
         </label>
 
         {/* Analyze Button */}
@@ -222,7 +229,7 @@ export default function PropAnalyzer() {
             onClick={() => handleFeedback("miss")}
             className="bg-red-600 text-white px-4 py-2 rounded hover:opacity-90"
           >
-            Didn’t Hit
+            Didn't Hit
           </button>
           {feedbackMsg && <span className="text-sm text-gray-600">{feedbackMsg}</span>}
         </div>
@@ -236,7 +243,7 @@ export default function PropAnalyzer() {
 
       {result && (
         <div className="space-y-4">
-          <ResultCard result={result} />
+          <ResultCard result={result} type="prop" />
           <div className="border rounded p-4">
             <div className="font-semibold mb-2">Analysis Result (raw)</div>
             <pre className="text-xs overflow-auto">{JSON.stringify(result, null, 2)}</pre>
