@@ -202,7 +202,7 @@ export default async function handler(req, res) {
     });
 
     // Normalize result with fallback handling
-    const normalizedResult = (function () {
+    const normalizedResult = await (async function () {
       try {
         if (!result || !result.decision) {
           return {
