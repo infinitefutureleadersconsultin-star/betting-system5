@@ -3,14 +3,30 @@ import axios from 'axios';
 import LoadingSpinner from './LoadingSpinner';
 import ResultCard from './ResultCard';
 
+// Odds conversion utilities
+const decimalToAmerican = (decimal) => {
+  const dec = Number(decimal);
+  if (!Number.isFinite(dec) || dec <= 1) return -110;
+  if (dec >= 2) return Math.round((dec - 1) * 100);
+  return Math.round(-100 / (dec - 1));
+};
+
+const americanToDecimal = (american) => {
+  const am = Number(american);
+  if (!Number.isFinite(am) || am === 0) return 2.0;
+  if (am > 0) return (am / 100) + 1;
+  return (100 / Math.abs(am)) + 1;
+};
+
 export default function PropAnalyzer() {
+  const [oddsFormat, setOddsFormat] = useState('decimal'); // 'decimal' or 'american'
   const [form, setForm] = useState({
     sport: 'NBA',
     player: '',
     opponent: '',
     prop: '',
-    oddsOver: '-110',
-    oddsUnder: '-110',
+    oddsOver: '2.0',
+    oddsUnder: '2.0',
     startTimeLocal: ''
   });
 
@@ -23,6 +39,24 @@ export default function PropAnalyzer() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleOddsFormatChange = (newFormat) => {
+    // Convert existing odds values when switching formats
+    if (oddsFormat === 'decimal' && newFormat === 'american') {
+      setForm((prev) => ({
+        ...prev,
+        oddsOver: String(decimalToAmerican(prev.oddsOver)),
+        oddsUnder: String(decimalToAmerican(prev.oddsUnder))
+      }));
+    } else if (oddsFormat === 'american' && newFormat === 'decimal') {
+      setForm((prev) => ({
+        ...prev,
+        oddsOver: String(americanToDecimal(prev.oddsOver).toFixed(2)),
+        oddsUnder: String(americanToDecimal(prev.oddsUnder).toFixed(2))
+      }));
+    }
+    setOddsFormat(newFormat);
   };
 
   const toISOFromLocal = (local) => {
@@ -42,16 +76,26 @@ export default function PropAnalyzer() {
     setError('');
     setResult(null);
 
+    // Convert to American odds for backend (backend expects American format)
+    let overAmerican, underAmerican;
+    if (oddsFormat === 'decimal') {
+      overAmerican = decimalToAmerican(form.oddsOver);
+      underAmerican = decimalToAmerican(form.oddsUnder);
+    } else {
+      overAmerican = parseFloat(form.oddsOver);
+      underAmerican = parseFloat(form.oddsUnder);
+    }
+
     const analysisData = {
       sport: (form.sport || '').trim(),
       player: (form.player || '').trim(),
       opponent: (form.opponent || '').trim(),
       prop: (form.prop || '').trim(),
       odds: {
-        over: parseFloat(form.oddsOver),
-        under: parseFloat(form.oddsUnder),
+        over: overAmerican,
+        under: underAmerican,
       },
-      currentPrice: parseFloat(form.oddsOver), // Use over odds as current price for CLV
+      currentPrice: overAmerican,
       startTime: toISOFromLocal(form.startTimeLocal),
     };
 
@@ -92,7 +136,35 @@ export default function PropAnalyzer() {
 
   return (
     <div className="max-w-3xl mx-auto p-4 space-y-6">
-      <h2 className="text-2xl font-semibold">Player Prop Analyzer</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-semibold">Player Prop Analyzer</h2>
+        
+        {/* Odds Format Toggle */}
+        <div className="flex items-center gap-2 bg-gray-100 rounded p-1">
+          <button
+            type="button"
+            onClick={() => handleOddsFormatChange('decimal')}
+            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+              oddsFormat === 'decimal'
+                ? 'bg-black text-white'
+                : 'bg-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Decimal
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOddsFormatChange('american')}
+            className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+              oddsFormat === 'american'
+                ? 'bg-black text-white'
+                : 'bg-transparent text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            American
+          </button>
+        </div>
+      </div>
 
       <form onSubmit={handleAnalyze} className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Sport */}
@@ -164,35 +236,43 @@ export default function PropAnalyzer() {
           />
         </label>
 
-        {/* Odds Over (American format) */}
+        {/* Odds Over */}
         <label className="flex flex-col">
-          <span className="text-sm font-medium mb-1">Over (American odds)</span>
+          <span className="text-sm font-medium mb-1">
+            Over ({oddsFormat === 'decimal' ? 'decimal' : 'American'})
+          </span>
           <input
             type="text"
             name="oddsOver"
             value={form.oddsOver}
             onChange={handleChange}
-            placeholder="-110, +120, etc."
+            placeholder={oddsFormat === 'decimal' ? '2.0, 1.85, etc.' : '-110, +120, etc.'}
             className="border rounded p-2"
           />
           <span className="text-xs text-gray-500 mt-1">
-            American format: -110, +150, etc.
+            {oddsFormat === 'decimal' 
+              ? 'Decimal format: 2.0, 1.85, etc.' 
+              : 'American format: -110, +150, etc.'}
           </span>
         </label>
 
-        {/* Odds Under (American format) */}
+        {/* Odds Under */}
         <label className="flex flex-col">
-          <span className="text-sm font-medium mb-1">Under (American odds)</span>
+          <span className="text-sm font-medium mb-1">
+            Under ({oddsFormat === 'decimal' ? 'decimal' : 'American'})
+          </span>
           <input
             type="text"
             name="oddsUnder"
             value={form.oddsUnder}
             onChange={handleChange}
-            placeholder="-110, +120, etc."
+            placeholder={oddsFormat === 'decimal' ? '2.0, 1.85, etc.' : '-110, +120, etc.'}
             className="border rounded p-2"
           />
           <span className="text-xs text-gray-500 mt-1">
-            American format: -110, +150, etc.
+            {oddsFormat === 'decimal' 
+              ? 'Decimal format: 2.0, 1.85, etc.' 
+              : 'American format: -110, +150, etc.'}
           </span>
         </label>
 
@@ -243,7 +323,7 @@ export default function PropAnalyzer() {
 
       {result && (
         <div className="space-y-4">
-          <ResultCard result={result} type="prop" />
+          <ResultCard result={result} type="prop" oddsFormat={oddsFormat} />
           <div className="border rounded p-4">
             <div className="font-semibold mb-2">Analysis Result (raw)</div>
             <pre className="text-xs overflow-auto">{JSON.stringify(result, null, 2)}</pre>
