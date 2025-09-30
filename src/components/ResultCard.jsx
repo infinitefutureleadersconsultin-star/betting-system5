@@ -6,13 +6,21 @@ function pct(x) {
   return `${Math.round(Number(x) * 1000) / 10}%`; // one decimal, e.g. 57.8%
 }
 
-function formatOdds(odds) {
+function formatOdds(odds, format = 'american') {
   if (!Number.isFinite(Number(odds))) return "-";
   const num = Number(odds);
+  
+  if (format === 'decimal') {
+    // Convert American to decimal
+    if (num > 0) return ((num / 100) + 1).toFixed(2);
+    return ((100 / Math.abs(num)) + 1).toFixed(2);
+  }
+  
+  // American format
   return num > 0 ? `+${num}` : String(num);
 }
 
-export default function ResultCard({ result, type }) {
+export default function ResultCard({ result, type, oddsFormat = 'american' }) {
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [note, setNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
