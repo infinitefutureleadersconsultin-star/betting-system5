@@ -27,7 +27,14 @@ export default async function handler(req, res) {
     if (!sport || !player || !prop) {
       return res.status(400).json({
         error: 'Missing required fields',
-        required: ['sport', 'player', 'prop']
+        required: ['sport', 'player', 'prop'],
+        example: {
+          sport: 'NBA',
+          player: 'LeBron James',
+          prop: 'Points 25.5',
+          startTime: '2025-10-15T19:00:00Z',
+          currentPrice: -110
+        }
       });
     }
 
@@ -47,7 +54,8 @@ export default async function handler(req, res) {
       user: {
         id: req.user.id,
         tier: req.user.tier,
-        queriesRemaining: req.rateLimit.remaining
+        queriesRemaining: req.rateLimit.remaining,
+        resetAt: req.rateLimit.resetAt
       }
     });
 
