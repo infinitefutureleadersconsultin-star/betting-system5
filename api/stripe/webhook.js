@@ -1,8 +1,9 @@
 // api/stripe/webhook.js
-// Stripe webhook handler for subscription events
+// Enhanced with monthly signal reset on renewal
 
 import Stripe from 'stripe';
 import { updateUserMetadata } from '../../lib/middleware/auth.js';
+import { resetUsage } from '../../lib/middleware/usageTracker.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -66,10 +67,33 @@ export default async function handler(req, res) {
           stripeCustomerId: subscription.customer,
           stripeSubscriptionId: subscription.id,
           subscriptionStatus: subscription.status,
-          currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString()
+          currentPeriodEnd: new Date(subscription.current_period_end * 1000).toISOString(),
+          currentPeriodStart: new Date(subscription.current_period_start * 1000).toISOString()
         });
 
+        // Reset usage on new subscription or renewal
+        if (event.type === 'customer.subscription.created') {
+          await resetUsage(userId);
+        }
+
         console.log(`[Stripe Webhook] Updated user ${userId} to tier: ${tier}`);
+        break;
+      }
+
+      case 'invoice.paid': {
+        // Reset signals on successful payment (monthly renewal)
+        const invoice = event.data.object;
+        const subscriptionId = invoice.subscription;
+        
+        if (subscriptionId) {
+          const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+          const userId = subscription.metadata?.userId;
+          
+          if (userId) {
+            await resetUsage(userId);
+            console.log(`[Stripe Webhook] Reset signals for user ${userId} (monthly renewal)`);
+          }
+        }
         break;
       }
 
