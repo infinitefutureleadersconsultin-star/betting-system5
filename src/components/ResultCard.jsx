@@ -1,9 +1,8 @@
-import React, { useState } from "react";
-import axios from "axios";
+import React from "react";
 
 function pct(x) {
   if (x == null || Number.isNaN(Number(x))) return "-";
-  return `${Math.round(Number(x) * 1000) / 10}%`; // one decimal, e.g. 57.8%
+  return `${Math.round(Number(x) * 1000) / 10}%`;
 }
 
 function formatOdds(odds, format = 'american') {
@@ -11,22 +10,67 @@ function formatOdds(odds, format = 'american') {
   const num = Number(odds);
   
   if (format === 'decimal') {
-    // Convert American to decimal
     if (num > 0) return ((num / 100) + 1).toFixed(2);
     return ((100 / Math.abs(num)) + 1).toFixed(2);
   }
   
-  // American format
   return num > 0 ? `+${num}` : String(num);
 }
 
-export default function ResultCard({ result, type, oddsFormat = 'american' }) {
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitMsg, setSubmitMsg] = useState("");
-  const [feedbackOutcome, setFeedbackOutcome] = useState(null);
+// Convert technical result into human-readable paragraph
+function generateAnalysisParagraph(result) {
+  const confidence = result.finalConfidence || result.confidence || 0;
+  const decision = result.decision || result.recommendation || "";
+  const player = result.player || "";
+  const prop = result.prop || "";
+  
+  // Confidence level description
+  let confidenceLevel = "";
+  if (confidence >= 70) confidenceLevel = "very high confidence";
+  else if (confidence >= 60) confidenceLevel = "solid confidence";
+  else confidenceLevel = "moderate confidence";
+  
+  // Decision context
+  let recommendation = "";
+  if (decision.includes("OVER")) {
+    recommendation = `We recommend betting the OVER on this prop`;
+  } else if (decision.includes("UNDER")) {
+    recommendation = `We recommend betting the UNDER on this prop`;
+  } else if (decision.includes("LOCK")) {
+    recommendation = `This is a LOCK play - our highest conviction level`;
+  } else if (decision.includes("STRONG")) {
+    recommendation = `This is a STRONG LEAN - high conviction play`;
+  } else if (decision.includes("LEAN")) {
+    recommendation = `This is a LEAN play`;
+  } else {
+    recommendation = `We suggest passing on this prop`;
+  }
+  
+  // Sample size context
+  const sampleSize = result.rawNumbers?.sampleSize || 0;
+  let dataQuality = "";
+  if (sampleSize >= 8) {
+    dataQuality = `based on strong recent data (${sampleSize} games)`;
+  } else if (sampleSize >= 5) {
+    dataQuality = `based on recent data (${sampleSize} games)`;
+  } else if (sampleSize > 0) {
+    dataQuality = `based on limited recent data (${sampleSize} games)`;
+  } else {
+    dataQuality = `based on season averages`;
+  }
+  
+  // CLV context
+  let clvContext = "";
+  if (result.clv && result.clv.favorability === "favorable") {
+    clvContext = ` This line has moved in our favor since opening, providing positive closing line value.`;
+  } else if (result.clv && result.clv.favorability === "unfavorable") {
+    clvContext = ` Note that the line has moved against us since opening.`;
+  }
+  
+  return `${recommendation} with ${confidenceLevel} (${confidence}%). Our analysis ${dataQuality} shows ${player}'s ${prop} performance justifies this prediction.${clvContext}`;
+}
 
+export default function ResultCard({ result, type, oddsFormat = 'american' }) {
   if (!result) return null;
 
   if (result.decision === "ERROR") {
@@ -55,56 +99,39 @@ export default function ResultCard({ result, type, oddsFormat = 'american' }) {
     return "text-gray-400";
   };
 
-  const handleFeedbackSubmit = async () => {
-    if (!feedbackOutcome) return;
-    setSubmitting(true);
-    setSubmitMsg("");
-    try {
-      const payload = {
-        note,
-        outcome: feedbackOutcome,
-        actualOutcome: result.actualOutcome || null,
-        result
-      };
-      const r = await axios.post("/api/feedback", payload);
-      if (r?.data?.ok) setSubmitMsg("Saved feedback ✅");
-      else setSubmitMsg("Saved (no-disk) ✅");
-      setNote("");
-      setFeedbackOpen(false);
-    } catch (err) {
-      setSubmitMsg("Failed to save feedback");
-      console.error("feedback failed", err);
-    } finally {
-      setSubmitting(false);
-      setTimeout(() => setSubmitMsg(""), 3000);
-    }
-  };
-
   return (
     <div className="space-y-6">
       {/* Main Decision Card */}
-      <div className={`p-4 border rounded-lg ${decisionColor(result.decision || result.recommendation)}`}>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xl font-bold">{type === "prop" ? result.player : result.game}</h3>
-          <span className="text-2xl font-bold">{result.decision || result.recommendation}</span>
+      <div className={`p-6 border-2 rounded-lg ${decisionColor(result.decision || result.recommendation)}`}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-2xl font-bold">{type === "prop" ? result.player : result.game}</h3>
+          <span className="text-3xl font-bold">{result.decision || result.recommendation}</span>
         </div>
 
-        <div className="text-lg mb-2">
+        <div className="text-xl mb-4">
           <span className="text-gray-300">{type === "prop" ? result.prop : result.line}</span>
           {result.suggestion && <span className="ml-2 font-semibold">{result.suggestion}</span>}
         </div>
 
-        <div className="flex items-center justify-between">
-          <span className={`text-lg font-semibold ${confColor(result.finalConfidence ?? result.confidence ?? 0)}`}>
+        <div className="flex items-center justify-between mb-4">
+          <span className={`text-2xl font-bold ${confColor(result.finalConfidence ?? result.confidence ?? 0)}`}>
             {(result.finalConfidence ?? result.confidence ?? 0)}% Confidence
           </span>
           {result.suggestedStake != null && (
-            <span className="text-sm text-gray-300">Stake: {result.suggestedStake}% bankroll</span>
+            <span className="text-lg text-gray-300">Stake: {result.suggestedStake}%</span>
           )}
+        </div>
+
+        {/* Human-Readable Analysis */}
+        <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+          <h4 className="text-sm font-semibold text-betting-green mb-2">Analysis Summary</h4>
+          <p className="text-gray-300 leading-relaxed">
+            {generateAnalysisParagraph(result)}
+          </p>
         </div>
       </div>
 
-      {/* CLV Card (NEW) */}
+      {/* CLV Card */}
       {result.clv && (
         <div className={`p-4 border rounded-lg ${
           result.clv.favorability === "favorable" 
@@ -127,55 +154,6 @@ export default function ResultCard({ result, type, oddsFormat = 'american' }) {
                 {result.clv.favorability}
               </span>
             </div>
-            <div>
-              <span className="text-gray-400">Line Movement:</span>
-              <span className="ml-2 font-mono">
-                {result.clv.lineDiff > 0 ? '+' : ''}{result.clv.lineDiff}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-400">Direction:</span>
-              <span className="ml-2 capitalize">{result.clv.direction}</span>
-            </div>
-            {result.clv.openingImpliedProb && (
-              <div>
-                <span className="text-gray-400">Opening Prob:</span>
-                <span className="ml-2 font-mono">{pct(result.clv.openingImpliedProb)}</span>
-              </div>
-            )}
-            {result.clv.currentImpliedProb && (
-              <div>
-                <span className="text-gray-400">Current Prob:</span>
-                <span className="ml-2 font-mono">{pct(result.clv.currentImpliedProb)}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Opening Odds Card (NEW) */}
-      {result.oddsData && (
-        <div className="bg-gray-800 p-4 rounded-lg">
-          <h4 className="font-semibold mb-3 text-betting-green">Opening Odds Data</h4>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-gray-400">Opening Line:</span>
-              <span className="ml-2 font-mono font-bold">{result.oddsData.openingLine}</span>
-            </div>
-            <div>
-              <span className="text-gray-400">Opening Price:</span>
-              <span className="ml-2 font-mono">{formatOdds(result.oddsData.openingPrice)}</span>
-            </div>
-            <div>
-              <span className="text-gray-400">Source:</span>
-              <span className="ml-2 font-semibold">{result.oddsData.source}</span>
-            </div>
-            <div>
-              <span className="text-gray-400">Timestamp:</span>
-              <span className="ml-2 text-xs">
-                {new Date(result.oddsData.timestamp).toLocaleString()}
-              </span>
-            </div>
           </div>
         </div>
       )}
@@ -183,11 +161,11 @@ export default function ResultCard({ result, type, oddsFormat = 'american' }) {
       {/* Top Drivers */}
       {Array.isArray(result.topDrivers) && result.topDrivers.length > 0 && (
         <div className="bg-gray-800 p-4 rounded-lg">
-          <h4 className="font-semibold mb-3 text-betting-green">Top Drivers</h4>
+          <h4 className="font-semibold mb-3 text-betting-green">Key Factors</h4>
           <ul className="space-y-1">
             {result.topDrivers.map((d, i) => (
               <li key={i} className="text-sm text-gray-300">
-                {i + 1}. {d}
+                • {d}
               </li>
             ))}
           </ul>
@@ -214,113 +192,6 @@ export default function ResultCard({ result, type, oddsFormat = 'american' }) {
                 </span>
               );
             })}
-          </div>
-        </div>
-      )}
-
-      {/* Raw Analytics */}
-      {result.rawNumbers && (
-        <div className="bg-gray-800 p-4 rounded-lg">
-          <h4 className="font-semibold mb-3 text-betting-green">Raw Analytics</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-            {Object.entries(result.rawNumbers).map(([k, v]) => {
-              // Skip odds fields (handled separately above)
-              if (k === "openingOdds" || k === "closingOdds" || 
-                  k === "openingOddsFallback" || k === "openingOddsFromSDIO") {
-                return null;
-              }
-              
-              const lower = typeof v === "number" && v >= 0 && v <= 1;
-              return (
-                <div key={k}>
-                  <span className="text-gray-400 capitalize">
-                    {k.replace(/([A-Z])/g, ' $1').trim()}:
-                  </span>
-                  <span className="ml-2 font-mono">
-                    {lower ? pct(v) : (typeof v === 'number' ? v.toFixed(3) : String(v))}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Feedback Buttons */}
-          <div className="mt-4 flex gap-2">
-            <button
-              className="bg-green-700 px-3 py-1 rounded hover:bg-green-600"
-              onClick={() => { 
-                setFeedbackOutcome("hit"); 
-                setFeedbackOpen(f => !f); 
-              }}
-            >
-              {feedbackOpen && feedbackOutcome === "hit" ? "Cancel" : "Hit"}
-            </button>
-            <button
-              className="bg-red-700 px-3 py-1 rounded hover:bg-red-600"
-              onClick={() => { 
-                setFeedbackOutcome("miss"); 
-                setFeedbackOpen(f => !f); 
-              }}
-            >
-              {feedbackOpen && feedbackOutcome === "miss" ? "Cancel" : "Didn't Hit"}
-            </button>
-            {submitMsg && <div className="text-sm text-green-400">{submitMsg}</div>}
-          </div>
-
-          {/* Feedback Form */}
-          {feedbackOpen && (
-            <div className="mt-3 space-y-2">
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="What happened? (optional notes)"
-                className="w-full p-2 bg-gray-900 border rounded text-sm"
-                rows={4}
-              />
-              <div className="flex gap-2">
-                <button
-                  disabled={submitting}
-                  onClick={handleFeedbackSubmit}
-                  className="bg-green-600 px-3 py-1 rounded hover:bg-green-500 disabled:opacity-50"
-                >
-                  {submitting ? "Saving..." : "Save Feedback"}
-                </button>
-                <button
-                  onClick={() => { 
-                    setFeedbackOpen(false); 
-                    setNote(""); 
-                    setFeedbackOutcome(null); 
-                  }}
-                  className="bg-gray-600 px-3 py-1 rounded hover:bg-gray-500"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Meta Information */}
-      {result.meta && (
-        <div className="bg-gray-800 p-4 rounded-lg">
-          <h4 className="font-semibold mb-3 text-gray-400">Meta Information</h4>
-          <div className="text-xs space-y-1">
-            {result.meta.matchedName && (
-              <div><span className="text-gray-500">Matched Name:</span> {result.meta.matchedName}</div>
-            )}
-            {result.meta.dataSource && (
-              <div><span className="text-gray-500">Data Source:</span> {result.meta.dataSource}</div>
-            )}
-            {result.meta.zeroFiltered !== undefined && (
-              <div><span className="text-gray-500">Zero-Filtered Games:</span> {result.meta.zeroFiltered}</div>
-            )}
-            {Array.isArray(result.meta.usedEndpoints) && result.meta.usedEndpoints.length > 0 && (
-              <div>
-                <span className="text-gray-500">Used Endpoints:</span>
-                <div className="ml-2 text-gray-400">{result.meta.usedEndpoints.join(", ")}</div>
-              </div>
-            )}
           </div>
         </div>
       )}
