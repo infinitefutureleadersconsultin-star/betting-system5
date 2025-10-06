@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "^4.32.5",
+    "@clerk/clerk-sdk-node": "^4.13.23",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
     "axios": "^1.7.2",
